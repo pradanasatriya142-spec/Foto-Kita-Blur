@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Kamera Blur Gesture</title>
+  <style>
+    body {
+      margin: 0;
+      background: #121212;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+      color: white;
+    }
+    .container {
+      position: relative;
+      width: 640px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #333;
+    }
+    video {
+      width: 100%;
+      display: block;
+      transform: scaleX(-1);
+    }
+    #blur-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      backdrop-filter: blur(0px);
+      -webkit-backdrop-filter: blur(0px);
+      transition: backdrop-filter 0.2s;
+      pointer-events: none;
+    }
+    #status {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #finger-info {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      display: none;
+      white-space: nowrap;
+    }
+    .hint {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <video id="video" autoplay playsinline></video>
+    <div id="blur-layer"></div>
+    <div id="status">Memulai kamera...</div>
+    <div id="finger-info"></div>
+  </div>
+
+  <p class="hint">✌️ Acungkan 2 jari → blur aktif &nbsp;|&nbsp; Jari lain → blur mati</p>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+  const video = document.getElementById('video');
+  const blurLayer = document.getElementById('blur-layer');
+  const status = document.getElementById('status');
+  const fingerInfo = document.getElementById('finger-info');
+
+  function countFingers(landmarks, handedness) {
+    let count = 0;
+
+    // --- 4 jari biasa (telunjuk, tengah, manis, kelingking) ---
+    const tips = [8, 12, 16, 20];
+    const pips = [6, 10, 14, 18];
+    for (let i = 0; i < tips.length; i++) {
+      if (landmarks[tips[i]].y < landmarks[pips[i]].y) count++;
+    }
+
+    // --- Jempol (lebih ketat) ---
+    // Pakai sumbu X, dan bandingkan dengan jarak antar landmark
+    const thumbTip  = landmarks[4];
+    const thumbIp   = landmarks[3];
+    const thumbMcp  = landmarks[2];
+    const wrist     = landmarks[0];
+
+    const isRightHand = handedness === 'Right';
+
+    // Hitung apakah jempol terbuka berdasarkan arah tangan
+    const thumbOpen = isRightHand
+      ? thumbTip.x < thumbIp.x   // tangan kanan: jempol ke kiri = terbuka
+      : thumbTip.x > thumbIp.x;  // tangan kiri: jempol ke kanan = terbuka
+
+    // Tambahan: pastikan jempol cukup jauh dari telapak
+    const thumbDistance = Math.abs(thumbTip.x - wrist.x);
+    const palmWidth = Math.abs(landmarks[5].x - landmarks[17].x);
+    const thumbFarEnough = thumbDistance > palmWidth * 0.3;
+
+    if (thumbOpen && thumbFarEnough) count++;
+
+    return count;
+  }
+
+  function setBlur(active) {
+    const val = active ? 'blur(18px)' : 'blur(0px)';
+    blurLayer.style.backdropFilter = val;
+    blurLayer.style.webkitBackdropFilter = val;
+  }
+
+  const hands = new Hands({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+  });
+
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.75,
+    minTrackingConfidence: 0.6
+  });
+
+  hands.onResults(results => {
+    status.textContent = 'Kamera aktif';
+
+    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+      setBlur(false);
+      fingerInfo.style.display = 'none';
+      status.textContent = 'Tidak ada tangan';
+      return;
+    }
+
+    let total = 0;
+    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      const lm = results.multiHandLandmarks[i];
+
+      // Ambil info tangan kiri/kanan dari MediaPipe
+      const handLabel = results.multiHandedness[i].label; // 'Left' atau 'Right'
+
+      total += countFingers(lm, handLabel);
+    }
+
+    const isTwo = total === 2;
+    setBlur(isTwo);
+
+    fingerInfo.style.display = 'block';
+    fingerInfo.textContent = `${total} jari${isTwo ? ' — BLUR AKTIF' : ''}`;
+    fingerInfo.style.background = isTwo
+      ? 'rgba(24,95,165,0.85)'
+      : 'rgba(0,0,0,0.6)';
+    status.textContent = isTwo ? '✌️ Angka 2 — Blur ON' : '👋 Tangan terdeteksi';
+  });
+
+  navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false })
+    .then(stream => {
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        const camera = new Camera(video, {
+          onFrame: async () => { await hands.send({ image: video }); },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+        status.textContent = 'Memuat model AI...';
+      };
+    })
+    .catch(() => {
+      status.textContent = 'Izin kamera ditolak!';
+      status.style.background = 'rgba(163,45,45,0.85)';
+    });
+</script>
